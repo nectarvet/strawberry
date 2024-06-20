@@ -1,5 +1,6 @@
 import pathlib
-from typing import List, Tuple
+import sys
+from typing import Any, List, Tuple
 
 import pytest
 
@@ -22,5 +23,37 @@ def pytest_collection_modifyitems(config: pytest.Config, items: List[pytest.Item
     for item in items:
         rel_path = pathlib.Path(item.fspath).relative_to(rootdir)
 
-        if "pydantic" in rel_path.parts:
-            item.add_marker(pytest.mark.pydantic)
+        markers = [
+            "aiohttp",
+            "asgi",
+            "chalice",
+            "channels",
+            "django",
+            "fastapi",
+            "flask",
+            "quart",
+            "pydantic",
+            "sanic",
+            "starlite",
+            "litestar",
+        ]
+
+        for marker in markers:
+            if marker in rel_path.parts:
+                item.add_marker(getattr(pytest.mark, marker))
+
+
+@pytest.hookimpl
+def pytest_ignore_collect(
+    collection_path: pathlib.Path, path: Any, config: pytest.Config
+):
+    if sys.version_info < (3, 12) and "python_312" in collection_path.parts:
+        return True
+
+    markers = config.getoption("-m")
+
+    # starlite has some issues with pydantic 2, which we
+    # use in our dev deps, so we skip starlite unless
+    # we're running the tests for it
+    if "starlite" not in markers and "starlite" in collection_path.parts:
+        return True

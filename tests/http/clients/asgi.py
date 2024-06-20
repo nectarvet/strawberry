@@ -15,6 +15,7 @@ from strawberry.asgi import GraphQL as BaseGraphQLView
 from strawberry.asgi.handlers import GraphQLTransportWSHandler, GraphQLWSHandler
 from strawberry.http import GraphQLHTTPResponse
 from strawberry.schema.config import StrawberryConfig
+from strawberry.http.ides import GraphQL_IDE
 from strawberry.types import ExecutionResult
 from tests.http.schema import Query, get_schema
 
@@ -70,7 +71,8 @@ class GraphQLView(BaseGraphQLView[object, Query]):
 class AsgiHttpClient(HttpClient):
     def __init__(
         self,
-        graphiql: bool = True,
+        graphiql: Optional[bool] = None,
+        graphql_ide: Optional[GraphQL_IDE] = "graphiql",
         allow_queries_via_get: bool = True,
         schema_config: Optional[StrawberryConfig] = None,
         result_override: ResultOverrideFunction = None,
@@ -79,6 +81,7 @@ class AsgiHttpClient(HttpClient):
         view = GraphQLView(
             schema=self.schema,
             graphiql=graphiql,
+            graphql_ide=graphql_ide,
             allow_queries_via_get=allow_queries_via_get,
             keep_alive=False,
         )

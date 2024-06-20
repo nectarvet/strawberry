@@ -8,6 +8,7 @@ from flask import Response as FlaskResponse
 from strawberry.flask.views import AsyncGraphQLView as BaseAsyncGraphQLView
 from strawberry.http import GraphQLHTTPResponse
 from strawberry.schema.config import StrawberryConfig
+from strawberry.http.ides import GraphQL_IDE
 from strawberry.types import ExecutionResult
 from tests.http.schema import Query, get_schema
 
@@ -48,7 +49,8 @@ class GraphQLView(BaseAsyncGraphQLView[Dict[str, object], Query]):
 class AsyncFlaskHttpClient(FlaskHttpClient):
     def __init__(
         self,
-        graphiql: bool = True,
+        graphiql: Optional[bool] = None,
+        graphql_ide: Optional[GraphQL_IDE] = "graphiql",
         allow_queries_via_get: bool = True,
         schema_config: Optional[StrawberryConfig] = None,
         result_override: ResultOverrideFunction = None,
@@ -60,6 +62,7 @@ class AsyncFlaskHttpClient(FlaskHttpClient):
             "graphql_view",
             schema=get_schema(config=schema_config),
             graphiql=graphiql,
+            graphql_ide=graphql_ide,
             allow_queries_via_get=allow_queries_via_get,
             result_override=result_override,
         )

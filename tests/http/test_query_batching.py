@@ -2,7 +2,7 @@ from typing import Type
 
 from strawberry.schema.config import StrawberryConfig
 
-from .clients import HttpClient
+from tests.http.clients.base import HttpClient
 
 
 async def test_batch_graphql_query(http_client_class: Type[HttpClient]):

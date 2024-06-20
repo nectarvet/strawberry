@@ -13,7 +13,6 @@ from strawberry.relay.fields import ConnectionExtension
 from strawberry.relay.utils import to_base64
 from strawberry.schema.types.scalar import DEFAULT_SCALAR_REGISTRY
 from strawberry.types.fields.resolver import StrawberryResolver
-from strawberry.types.info import Info
 
 from .schema import FruitAsync, schema
 
@@ -364,6 +363,8 @@ query TestQuery (
 attrs = [
     "fruits",
     "fruitsLazy",
+    "fruitsAlias",
+    "fruitsAliasLazy",
     "fruitsConcreteResolver",
     "fruitsCustomResolver",
     "fruitsCustomResolverLazy",
@@ -579,6 +580,35 @@ async def test_query_connection_filtering_first_async(mocker, query_attr: str):
             },
         }
     }
+
+
+def test_query_connection_filtering_after_without_first():
+    result = schema.execute_sync(
+        """{ someFruits {
+            edges { node { id } }
+            pageInfo {
+                endCursor
+            }
+        } }"""
+    )
+    assert not result.errors
+    assert len(result.data["someFruits"]["edges"]) == 100
+    assert (
+        relay.from_base64(result.data["someFruits"]["edges"][99]["node"]["id"])[1]
+        == "99"
+    )
+    result = schema.execute_sync(
+        """query ($after: String!){ someFruits(after: $after, first: 100) {
+            edges { node { id } }
+        } }""",
+        variable_values={"after": result.data["someFruits"]["pageInfo"]["endCursor"]},
+    )
+    assert not result.errors
+    assert len(result.data["someFruits"]["edges"]) == 100
+    assert (
+        relay.from_base64(result.data["someFruits"]["edges"][-1]["node"]["id"])[1]
+        == "199"
+    )
 
 
 @pytest.mark.parametrize("query_attr", attrs)
@@ -1450,8 +1480,7 @@ def test_parameters(mocker: MockerFixture):
     class Fruit(relay.Node):
         code: relay.NodeID[str]
 
-    def resolver(info: Info) -> List[Fruit]:
-        ...
+    def resolver(info: strawberry.Info) -> List[Fruit]: ...
 
     @strawberry.type
     class Query:
@@ -1545,3 +1574,53 @@ def test_parameters(mocker: MockerFixture):
     }
     '''
     assert str(schema) == textwrap.dedent(expected).strip()
+
+
+before_after_test_query = """
+query fruitsBeforeAfterTest (
+    $before: String = null,
+    $after: String = null,
+) {
+    fruits (
+        before: $before
+        after: $after
+    ) {
+        edges {
+            cursor
+            node {
+                id
+            }
+        }
+    }
+}
+"""
+
+
+async def test_query_before_error():
+    """
+    Verify if the error raised on a non-existing before hash
+    raises the correct error
+    """
+    # with pytest.raises(ValueError):
+    index = to_base64("Fake", 9292292)
+    result = await schema.execute(
+        before_after_test_query,
+        variable_values={"before": index},
+    )
+    assert result.errors is not None
+    assert "Argument 'before' contains a non-existing value" in str(result.errors)
+
+
+def test_query_after_error():
+    """
+    Verify if the error raised on a non-existing before hash
+    raises the correct error
+    """
+    index = to_base64("Fake", 9292292)
+    result = schema.execute_sync(
+        before_after_test_query,
+        variable_values={"after": index},
+    )
+
+    assert result.errors is not None
+    assert "Argument 'after' contains a non-existing value" in str(result.errors)

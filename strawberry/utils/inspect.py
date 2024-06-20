@@ -8,10 +8,12 @@ from typing import (
     List,
     Optional,
     TypeVar,
+    get_origin,
 )
 from typing_extensions import get_args
 
 from strawberry.type import has_object_definition
+from strawberry.utils.typing import is_generic_alias
 
 
 def in_async_context() -> bool:
@@ -38,7 +40,7 @@ def get_func_args(func: Callable[[Any], Any]) -> List[str]:
     ]
 
 
-def get_specialized_type_var_map(cls: type) -> Optional[Dict[TypeVar, type]]:
+def get_specialized_type_var_map(cls: type) -> Optional[Dict[str, type]]:
     """Get a type var map for specialized types.
 
     Consider the following:
@@ -77,8 +79,12 @@ def get_specialized_type_var_map(cls: type) -> Optional[Dict[TypeVar, type]]:
     """
     orig_bases = getattr(cls, "__orig_bases__", None)
     if orig_bases is None:
-        # Not a specialized type
-        return None
+        # Specialized generic aliases will not have __orig_bases__
+        if get_origin(cls) is not None and is_generic_alias(cls):
+            orig_bases = (cls,)
+        else:
+            # Not a specialized type
+            return None
 
     type_var_map = {}
 
@@ -88,9 +94,10 @@ def get_specialized_type_var_map(cls: type) -> Optional[Dict[TypeVar, type]]:
 
     for base in orig_bases:
         # Recursively get type var map from base classes
-        base_type_var_map = get_specialized_type_var_map(base)
-        if base_type_var_map is not None:
-            type_var_map.update(base_type_var_map)
+        if base is not cls:
+            base_type_var_map = get_specialized_type_var_map(base)
+            if base_type_var_map is not None:
+                type_var_map.update(base_type_var_map)
 
         args = get_args(base)
         origin = getattr(base, "__origin__", None)
@@ -103,7 +110,7 @@ def get_specialized_type_var_map(cls: type) -> Optional[Dict[TypeVar, type]]:
             continue
 
         type_var_map.update(
-            {p: a for p, a in zip(params, args) if not isinstance(a, TypeVar)}
+            {p.__name__: a for p, a in zip(params, args) if not isinstance(a, TypeVar)}
         )
 
     return type_var_map

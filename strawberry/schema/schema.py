@@ -16,6 +16,8 @@ from typing import (
 )
 
 from graphql import (
+    GraphQLBoolean,
+    GraphQLField,
     GraphQLNamedType,
     GraphQLNonNull,
     GraphQLSchema,
@@ -82,7 +84,7 @@ class Schema(BaseSchema):
             Dict[object, Union[Type, ScalarWrapper, ScalarDefinition]]
         ] = None,
         schema_directives: Iterable[object] = (),
-    ):
+    ) -> None:
         self.query = query
         self.mutation = mutation
         self.subscription = subscription
@@ -100,7 +102,9 @@ class Schema(BaseSchema):
             # TODO: check that the overrides are valid
             scalar_registry.update(cast(SCALAR_OVERRIDES_DICT_TYPE, scalar_overrides))
 
-        self.schema_converter = GraphQLCoreConverter(self.config, scalar_registry)
+        self.schema_converter = GraphQLCoreConverter(
+            self.config, scalar_registry, self.get_fields
+        )
         self.directives = directives
         self.schema_directives = list(schema_directives)
 
@@ -128,7 +132,7 @@ class Schema(BaseSchema):
                 )
             else:
                 if has_object_definition(type_):
-                    if type_.__strawberry_definition__.is_generic:
+                    if type_.__strawberry_definition__.is_graphql_generic:
                         type_ = StrawberryAnnotation(type_).resolve()  # noqa: PLW2901
                 graphql_type = self.schema_converter.from_maybe_optional(type_)
                 if isinstance(graphql_type, GraphQLNonNull):
@@ -166,6 +170,7 @@ class Schema(BaseSchema):
 
         self._warn_for_federation_directives()
         self._resolve_node_ids()
+        self._extend_introspection()
 
         # Validate schema early because we want developers to know about
         # possible issues as soon as possible
@@ -184,7 +189,7 @@ class Schema(BaseSchema):
 
         return extensions
 
-    @lru_cache()
+    @lru_cache
     def get_type_by_name(
         self, name: str
     ) -> Optional[
@@ -220,7 +225,7 @@ class Schema(BaseSchema):
             None,
         )
 
-    @lru_cache()
+    @lru_cache
     def get_directive_by_name(self, graphql_name: str) -> Optional[StrawberryDirective]:
         return next(
             (
@@ -230,6 +235,11 @@ class Schema(BaseSchema):
             ),
             None,
         )
+
+    def get_fields(
+        self, type_definition: StrawberryObjectDefinition
+    ) -> List[StrawberryField]:
+        return type_definition.fields
 
     async def execute(
         self,
@@ -259,7 +269,7 @@ class Schema(BaseSchema):
             execution_context_class=self.execution_context_class,
             execution_context=execution_context,
             allowed_operation_types=allowed_operation_types,
-            process_errors=self.process_errors,
+            process_errors=self._process_errors,
         )
 
         return result
@@ -291,7 +301,7 @@ class Schema(BaseSchema):
             execution_context_class=self.execution_context_class,
             execution_context=execution_context,
             allowed_operation_types=allowed_operation_types,
-            process_errors=self.process_errors,
+            process_errors=self._process_errors,
         )
 
         return result
@@ -314,7 +324,7 @@ class Schema(BaseSchema):
             operation_name=operation_name,
         )
 
-    def _resolve_node_ids(self):
+    def _resolve_node_ids(self) -> None:
         for concrete_type in self.schema_converter.type_map.values():
             type_def = concrete_type.definition
 
@@ -334,9 +344,18 @@ class Schema(BaseSchema):
             # early feedback for missing NodeID annotations
             origin = type_def.origin
             if issubclass(origin, relay.Node):
-                origin.resolve_id_attr()
+                has_custom_resolve_id = False
+                for base in origin.__mro__:
+                    if base is relay.Node:
+                        break
+                    if "resolve_id" in base.__dict__:
+                        has_custom_resolve_id = True
+                        break
 
-    def _warn_for_federation_directives(self):
+                if not has_custom_resolve_id:
+                    origin.resolve_id_attr()
+
+    def _warn_for_federation_directives(self) -> None:
         """Raises a warning if the schema has any federation directives."""
         from strawberry.federation.schema_directives import FederationDirective
 
@@ -358,6 +377,17 @@ class Schema(BaseSchema):
                 UserWarning,
                 stacklevel=3,
             )
+
+    def _extend_introspection(self) -> None:
+        def _resolve_is_one_of(obj: Any, info: Any) -> bool:
+            if "strawberry-definition" not in obj.extensions:
+                return False
+
+            return obj.extensions["strawberry-definition"].is_one_of
+
+        instrospection_type = self._schema.type_map["__Type"]
+        instrospection_type.fields["isOneOf"] = GraphQLField(GraphQLBoolean)  # type: ignore[attr-defined]
+        instrospection_type.fields["isOneOf"].resolve = _resolve_is_one_of  # type: ignore[attr-defined]
 
     def as_str(self) -> str:
         return print_schema(self)

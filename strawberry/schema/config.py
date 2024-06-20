@@ -18,13 +18,14 @@ class StrawberryConfig:
     name_converter: NameConverter = field(default_factory=NameConverter)
     default_resolver: Callable[[Any, str], object] = getattr
     relay_max_results: int = 100
+    disable_field_suggestions: bool = False
 
     batching_config: BatchingConfig = None  # type: ignore
 
     def __post_init__(
         self,
-        auto_camel_case: Optional[bool],
-    ):
+        auto_camel_case: bool,
+    ) -> None:
         if auto_camel_case is not None:
             self.name_converter.auto_camel_case = auto_camel_case
 

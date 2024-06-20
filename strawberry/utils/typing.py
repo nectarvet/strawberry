@@ -23,7 +23,7 @@ from typing import (  # type: ignore
     cast,
     overload,
 )
-from typing_extensions import Annotated, get_args, get_origin
+from typing_extensions import Annotated, TypeGuard, get_args, get_origin
 
 ast_unparse = getattr(ast, "unparse", None)
 # ast.unparse is only available on python 3.9+. For older versions we will
@@ -37,7 +37,7 @@ if not TYPE_CHECKING and ast_unparse is None:
     ast_unparse = astunparse.unparse
 
 
-@lru_cache()
+@lru_cache
 def get_generic_alias(type_: Type) -> Type:
     """Get the generic alias for a type.
 
@@ -63,13 +63,18 @@ def get_generic_alias(type_: Type) -> Type:
             continue
 
         attr = getattr(typing, attr_name)
-        # _GenericAlias overrides all the methods that we can use to know if
-        # this is a subclass of it. But if it has an "_inst" attribute
-        # then it for sure is a _GenericAlias
-        if hasattr(attr, "_inst") and attr.__origin__ is type_:
+        if is_generic_alias(attr) and attr.__origin__ is type_:
             return attr
 
     raise AssertionError(f"No GenericAlias available for {type_}")  # pragma: no cover
+
+
+def is_generic_alias(type_: Any) -> TypeGuard[_GenericAlias]:
+    """Returns True if the type is a generic alias."""
+    # _GenericAlias overrides all the methods that we can use to know if
+    # this is a subclass of it. But if it has an "_inst" attribute
+    # then it for sure is a _GenericAlias
+    return hasattr(type_, "_inst")
 
 
 def is_list(annotation: object) -> bool:
@@ -141,7 +146,8 @@ def is_concrete_generic(annotation: type) -> bool:
 
 def is_generic_subclass(annotation: type) -> bool:
     return isinstance(annotation, type) and issubclass(
-        annotation, Generic  # type:ignore
+        annotation,
+        Generic,  # type:ignore
     )
 
 
@@ -182,6 +188,14 @@ def is_classvar(cls: type, annotation: Union[ForwardRef, str]) -> bool:
     )
 
 
+def type_has_annotation(type_: object, annotation: Type) -> bool:
+    """Returns True if the type_ has been annotated with annotation."""
+    if get_origin(type_) is Annotated:
+        return any(isinstance(argument, annotation) for argument in get_args(type_))
+
+    return False
+
+
 def get_parameters(annotation: Type) -> Union[Tuple[object], Tuple[()]]:
     if (
         isinstance(annotation, _GenericAlias)
@@ -195,17 +209,15 @@ def get_parameters(annotation: Type) -> Union[Tuple[object], Tuple[()]]:
 
 
 @overload
-def _ast_replace_union_operation(expr: ast.expr) -> ast.expr:
-    ...
+def _ast_replace_union_operation(expr: ast.expr) -> ast.expr: ...
 
 
 @overload
-def _ast_replace_union_operation(expr: ast.Expr) -> ast.Expr:
-    ...
+def _ast_replace_union_operation(expr: ast.Expr) -> ast.Expr: ...
 
 
 def _ast_replace_union_operation(
-    expr: Union[ast.Expr, ast.expr]
+    expr: Union[ast.Expr, ast.expr],
 ) -> Union[ast.Expr, ast.expr]:
     if isinstance(expr, ast.Expr) and isinstance(
         expr.value, (ast.BinOp, ast.Subscript)
@@ -274,6 +286,12 @@ def _get_namespace_from_ast(
     elif (
         isinstance(expr, ast.Subscript)
         and isinstance(expr.value, ast.Name)
+        and expr.value.id in {"list", "List"}
+    ):
+        extra.update(_get_namespace_from_ast(expr.slice, globalns, localns))
+    elif (
+        isinstance(expr, ast.Subscript)
+        and isinstance(expr.value, ast.Name)
         and expr.value.id == "Annotated"
     ):
         assert ast_unparse
@@ -295,9 +313,9 @@ def _get_namespace_from_ast(
         # here to resolve lazy types by execing the annotated args, resolving the
         # type directly and then adding it to extra namespace, so that _eval_type
         # can properly resolve it later
-        type_name = args[0]
+        type_name = args[0].strip(" '\"\n")
         for arg in args[1:]:
-            evaled_arg = eval(arg, globalns, localns)  # noqa: PGH001
+            evaled_arg = eval(arg, globalns, localns)  # noqa: PGH001, S307
             if isinstance(evaled_arg, StrawberryLazyReference):
                 extra[type_name] = evaled_arg.resolve_forward_ref(ForwardRef(type_name))
 
@@ -348,7 +366,7 @@ def eval_type(
                     remaining_args = [
                         a
                         for a in args[1:]
-                        if not isinstance(arg, StrawberryLazyReference)
+                        if not isinstance(a, StrawberryLazyReference)
                     ]
                     type_arg = (
                         arg.resolve_forward_ref(args[0])
@@ -359,9 +377,9 @@ def eval_type(
                     break
                 if isinstance(arg, StrawberryAuto):
                     remaining_args = [
-                        a for a in args[1:] if not isinstance(arg, StrawberryAuto)
+                        a for a in args[1:] if not isinstance(a, StrawberryAuto)
                     ]
-                    args = (arg, *remaining_args)
+                    args = (args[0], arg, *remaining_args)
                     break
 
             # If we have only a StrawberryLazyReference and no more annotations,

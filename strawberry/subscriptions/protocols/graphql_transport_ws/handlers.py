@@ -4,7 +4,16 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable, Dict, List, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+)
 
 from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError, GraphQLSyntaxError, parse
@@ -32,6 +41,7 @@ if TYPE_CHECKING:
     from strawberry.subscriptions.protocols.graphql_transport_ws.types import (
         GraphQLTransportMessage,
     )
+    from strawberry.types import ExecutionResult
 
 
 class BaseGraphQLTransportWSHandler(ABC):
@@ -42,7 +52,7 @@ class BaseGraphQLTransportWSHandler(ABC):
         schema: BaseSchema,
         debug: bool,
         connection_init_wait_timeout: timedelta,
-    ):
+    ) -> None:
         self.schema = schema
         self.debug = debug
         self.connection_init_wait_timeout = connection_init_wait_timeout
@@ -108,8 +118,6 @@ class BaseGraphQLTransportWSHandler(ABC):
             self.connection_timed_out = True
             reason = "Connection initialisation timeout"
             await self.close(code=4408, reason=reason)
-        except asyncio.CancelledError:
-            raise
         except Exception as error:
             await self.handle_task_exception(error)  # pragma: no cover
         finally:
@@ -140,7 +148,15 @@ class BaseGraphQLTransportWSHandler(ABC):
 
             elif message_type == SubscribeMessage.type:
                 handler = self.handle_subscribe
-                payload = SubscribeMessagePayload(**message.pop("payload"))
+
+                payload_args = message.pop("payload")
+
+                payload = SubscribeMessagePayload(
+                    query=payload_args["query"],
+                    operationName=payload_args.get("operationName"),
+                    variables=payload_args.get("variables"),
+                    extensions=payload_args.get("extensions"),
+                )
                 handler_arg = SubscribeMessage(payload=payload, **message)
 
             elif message_type == CompleteMessage.type:
@@ -165,11 +181,17 @@ class BaseGraphQLTransportWSHandler(ABC):
         if self.connection_init_timeout_task:
             self.connection_init_timeout_task.cancel()
 
-        if message.payload is not UNSET and not isinstance(message.payload, dict):
+        payload = (
+            message.payload
+            if message.payload is not None and message.payload is not UNSET
+            else {}
+        )
+
+        if not isinstance(payload, dict):
             await self.close(code=4400, reason="Invalid connection init payload")
             return
 
-        self.connection_params = message.payload
+        self.connection_params = payload
 
         if self.connection_init_received:
             reason = "Too many initialisation requests"
@@ -233,7 +255,7 @@ class BaseGraphQLTransportWSHandler(ABC):
             )
         else:
             # create AsyncGenerator returning a single result
-            async def get_result_source():
+            async def get_result_source() -> AsyncIterator[ExecutionResult]:
                 yield await self.schema.execute(
                     query=message.payload.query,
                     variable_values=message.payload.variables,
@@ -314,9 +336,6 @@ class BaseGraphQLTransportWSHandler(ABC):
                         ]
                     next_message = NextMessage(id=operation.id, payload=next_payload)
                     await operation.send_message(next_message)
-        except asyncio.CancelledError:
-            # CancelledErrors are expected during task cleanup.
-            raise
         except Exception as error:
             # GraphQLErrors are handled by graphql-core and included in the
             # ExecutionResult
@@ -374,7 +393,7 @@ class Operation:
         handler: BaseGraphQLTransportWSHandler,
         id: str,
         operation_type: OperationType,
-    ):
+    ) -> None:
         self.handler = handler
         self.id = id
         self.operation_type = operation_type
